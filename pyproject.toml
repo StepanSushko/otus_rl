@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "otus"
+version = "0.1.0"
+description = "RL"
+authors = ["Stepan"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^2.2.1"
+numpy = "^1.26.4"
+
+[tool.poetry.group.dev.dependencies]
+pytorch = "^1.0.2"
+gymnasium = "^0.29.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
