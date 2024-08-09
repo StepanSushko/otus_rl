@@ -39,17 +39,11 @@ from torch.nn import functional as F
 
 
 from tqdm import tqdm, trange
-
-# %%
 gym.__version__
 
-# %% [markdown]
-# # Actor & Critic Nets
 
-# %%
-import torch
-import torch.nn as nn
-import numpy as np
+# %% Simple CNN
+
 
 # Assuming obs is your observation in the form Box(0, 255, (96, 96, 3), uint8)
 obs = np.random.randint(0, 256, size=(96, 96, 3), dtype=np.uint8)  # Example random observation
@@ -109,14 +103,49 @@ def preprocess(img):
     #img = img[:84, 6:90] # CarRacing-v2-specific cropping
     # img = cv2.resize(img, dsize=(84, 84)) # or you can simply use rescaling
     
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)  / 255.0
+    # Remove all green squares
+    green_mask = ( (np.abs( img[:,:,1] )>= 208) & (np.abs(img[:,:,1] ) <= 248) )
+    img[green_mask] = np.array([100, 202, 100])
+
+    # Convert to grayscale
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) / 255.0
     return img
+
+
+if False:
+    s_new = s.copy()
+    
+    green_mask = ( (np.abs(s[:,:,1] )>= 208) & (np.abs(s[:,:,1] ) <= 248) )
+    s_new[green_mask] = np.array([100, 202, 100])
+    plt.imshow( s_new )
+    
+    plt.savefig('image.png')
+
+
+    # Find all unique colors
+    unique_colors = np.unique(s.reshape(-1, s.shape[-1]), axis=0)
+
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(s, cv2.COLOR_RGB2GRAY)
+
+    # Print the number of unique colors and the shape of the grayscale image
+    print(f"Number of unique colors: {len(unique_colors)}")
+    print(f"Shape of the grayscale image: {gray_image.shape}")
+
+
+    plt.imshow(gray_image, cmap='gray')
+    plt.axis('off')
+    plt.show()
+    gray_image
+
+    s
+
 
 class ImageEnv(gym.Wrapper):
     def __init__(
         self,
         env,
-        skip_frames=10,
+        skip_frames=5,
         stack_frames=10,
         initial_no_op=50,
         **kwargs
@@ -135,10 +164,10 @@ class ImageEnv(gym.Wrapper):
             s, r, terminated, truncated, info = self.env.step([0.0, 0.0, 0.0])
         
         # Convert a frame to 84 X 84 gray scale one
-        s = preprocess(s)
+        #s = preprocess(s)
 
         # The initial observation is simply a copy of the frame `s`
-        self.stacked_state = np.tile(s, (self.stack_frames, 1, 1))  # [4, 84, 84]
+        #self.stacked_state = np.tile(s, (self.stack_frames, 1, 1))  # [4, 84, 84]
         self.stacked_state = np.tile(s, (1, 1, self.stack_frames))  # [96, 96, 12]
         return self.stacked_state, info
     
@@ -152,11 +181,86 @@ class ImageEnv(gym.Wrapper):
                 break
 
         # Convert a frame to 84 X 84 gray scale one
-        s = preprocess(s)
+        #s = preprocess(s)
 
         # Push the current frame `s` at the end of self.stacked_state
         #self.stacked_state = np.concatenate((self.stacked_state[1:], s[np.newaxis]), axis=0)
-        self.stacked_state = np.concatenate((self.stacked_state[:,:,3:], s), axis=2)
+        self.stacked_state = np.concatenate((self.stacked_state[:,:,(3):], s), axis=2)
+
+        return self.stacked_state, reward, terminated, truncated, info
+
+#s = preprocess(s) # s.shape
+if False:
+    stacked_state = np.tile(s, (4, 1, 1))  # [96, 96, 12]  # [4, 84, 84]
+    stacked_state.shape
+
+    action = [0, 0, 0]
+
+    reward = 0
+    for _ in range(4):
+                s, r, terminated, truncated, info =env.step(action)
+                reward += r
+                if terminated or truncated:
+                    break
+
+            # Convert a frame to 84 X 84 gray scale one
+    s_p = preprocess(s) # s.shape
+    s_p = s_p[..., np.newaxis].shape
+    s_p
+
+            # Push the current frame `s` at the end of self.stacked_state
+            #self.stacked_state = np.concatenate((self.stacked_state[1:], s[np.newaxis]), axis=0)
+    stacked_state = np.concatenate((stacked_state[1:, :, :].shape, s.shape), axis=0)
+    np.concatenate((stacked_state[1:], s[np.newaxis]), axis=0).shape
+            
+
+class ImageEnv_GrayScaled(gym.Wrapper):
+    def __init__(
+        self,
+        env,
+        skip_frames=5,
+        stack_frames=10,
+        initial_no_op=50,
+        **kwargs
+    ):
+        super(ImageEnv_GrayScaled, self).__init__(env, **kwargs)
+        self.initial_no_op = initial_no_op
+        self.skip_frames = skip_frames
+        self.stack_frames = stack_frames
+    
+    def reset(self):
+        # Reset the original environment.
+        s, info = self.env.reset()
+
+        # Do nothing for the next `self.initial_no_op` steps
+        for i in range(self.initial_no_op):
+            s, r, terminated, truncated, info = self.env.step([ 0.0, 0.0, 0.0])
+        
+        # Convert a frame to 84 X 84 gray scale one
+        s = preprocess(s)
+        s = s[..., np.newaxis]
+
+        # The initial observation is simply a copy of the frame `s`
+        self.stacked_state = np.tile(s, (1, 1, self.stack_frames))  # [96, 96, 12]  # [4, 84, 84]
+        #self.stacked_state = np.tile(s, (self.stack_frames, 1, 1))  # [4, 84, 84]
+        return self.stacked_state, info
+    
+    def step(self, action):
+        # We take an action for self.skip_frames steps
+        reward = 0
+        for _ in range(self.skip_frames):
+            s, r, terminated, truncated, info = self.env.step(action)
+            reward += r
+            if terminated or truncated:
+                break
+
+        # Convert a frame to 84 X 84 gray scale one
+        s = preprocess(s)
+        s = s[..., np.newaxis]
+
+        # Push the current frame `s` at the end of self.stacked_state
+        #self.stacked_state = np.concatenate((self.stacked_state[1:], s[np.newaxis]), axis=0)
+        self.stacked_state = np.concatenate((self.stacked_state[:,:,1:], s), axis=2)
 
         return self.stacked_state, reward, terminated, truncated, info
 
@@ -169,15 +273,18 @@ class ActorNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
         super().__init__()
 
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
-        self.hidden3 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
+        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
+        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
+        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
         self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        self.hidden5 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride = 1) # (64* 5*5)
-        self.hidden6 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride = 1) # (128, 3, 3)
+        #self.hidden5 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride = 1) # (64* 5*5)
+        #self.hidden6 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride = 1) # (128, 3, 3)
         
         #self.hidden4 = nn.Linear( in_features = 32*11*11, out_features = 11*11)
-        self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
+        #self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
+        self.hidden_linear = nn.Linear( in_features = 576, out_features = 64)
         
         #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3) 
         # #nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3)
@@ -199,10 +306,10 @@ class ActorNet(nn.Module):
         outs = F.relu(outs)
         outs = self.hidden4(outs)
         outs = F.relu(outs)
-        outs = self.hidden5(outs)
-        outs = F.relu(outs)
-        outs = self.hidden6(outs)
-        outs = F.relu(outs)
+        #outs = self.hidden5(outs)
+        #outs = F.relu(outs)
+        #outs = self.hidden6(outs)
+        #outs = F.relu(outs)
 
         outs = torch.flatten( outs, 1 )
         
@@ -223,15 +330,15 @@ class ValueNet(nn.Module):
 
         #self.hidden = nn.Conv2d(in_channels=3, out_channels=hidden_dim, kernel_size=3) #nn.Linear( in_features = 96*96*3, out_features = hidden_dim)
         
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3, out_features = hidden_dim)
-        self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2) 
-        self.hidden3 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride = 2)       
-        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32*11*11)
-        self.hidden5 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride = 1) # (64* 5*5)
-        self.hidden6 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride = 1) # (128, 3, 3)
+        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
+        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
+        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
+        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
         
         #self.hidden_linear = nn.Linear( in_features = 64*5*5, out_features = 4*5*5)
-        self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
+        self.hidden_linear = nn.Linear( in_features = 576, out_features = 64)
         
         
         self.output_linear = nn.Linear( in_features = 64, out_features = 1)
@@ -249,10 +356,10 @@ class ValueNet(nn.Module):
         outs = F.relu(outs)
         outs = self.hidden4(outs)
         outs = F.relu(outs)
-        outs = self.hidden5(outs)
-        outs = F.relu(outs)
-        outs = self.hidden6(outs)
-        outs = F.relu(outs)
+        #outs = self.hidden5(outs)
+        #outs = F.relu(outs)
+        #outs = self.hidden6(outs)
+        #outs = F.relu(outs)
 
         
         outs = torch.flatten( outs, 1 )
@@ -321,7 +428,7 @@ def pick_sample(s, episode_, stochastic_policy = False):
         #obs = np.random.randint(0, 256, size=(96, 96, 3), dtype=np.uint8)  # Example random observation
 
         # Normalize the observation values
-        #s_batch_normalized = s_batch.astype(np.float32) / 255.0  # Normalizing to [0, 1] range
+        s_batch_normalized = s_batch.astype(np.float32) #/ 255.0  # Normalizing to [0, 1] range
 
         # Convert the observation to a PyTorch tensor
         # NCHW stands for: batch N, channels C, depth D, height H, width W
@@ -384,7 +491,7 @@ def pick_sample(s, episode_, stochastic_policy = False):
 
 # %%
 env = gym.make("CarRacing-v2")  # среда
-env = ImageEnv(env)
+env = ImageEnv_GrayScaled(env)
 env.observation_space
 
 # %%
@@ -393,11 +500,14 @@ env.action_space
 
 # %%
 
+stacked_frames = 10
+channels = 1
+
 # create a new model with these weights
-actor_func = ActorNet()
+actor_func = ActorNet( frames_number = stacked_frames, channels=channels )
 actor_func.apply(weights_init_uniform_rule)
-actor_func        = ActorNet().to(device)
-actor_target_func = ActorNet().to(device)
+actor_func        = actor_func.to(device)
+actor_target_func = actor_func.to(device)
 
 # Подгрузить в целевую сеть коэффициенты из сети политики
 actor_target_func.load_state_dict(actor_func.state_dict())
@@ -445,7 +555,7 @@ os.makedirs(folder_name, exist_ok=True)
 #for i in trange(num_episodes, desc="Episodes", postfix={"Last reward": cum_reward_}):
 
 #with tqdm(total=num_episodes, postfix=[ {"Reward": 0, "V_loss": 0, "Pi_loss": 0}]) as t:
-#    for i in range(num_episodes):
+#    for i in range(num_episodes): i = 0
 for i in range(num_episodes):
         
         #for i in range(num_episodes):
@@ -474,7 +584,7 @@ for i in range(num_episodes):
             states.append(s_prepared.tolist()) # states.size()
             
             # выполнить шаг, получить награду (r), следующее состояние (s) и флаги конечного состояния (term, trunc)
-            s, r, term, trunc, _ = env.step(a)
+            s, r, term, trunc, _ = env.step(a) # s.shape
             frames.append(s) # !
             
             # если конечное состояние - устанавливаем флаг окончания в True
@@ -649,14 +759,16 @@ for i in range(num_episodes):
                 
             if True:
                 # Create animation
-
-
-                # Create animation
+                if channels == 1:
+                    cmap='gray'
+                else:
+                    cmap=None
+                
                 fig = plt.figure(figsize=(5, 5))
                 plt.axis('off')
-                im = plt.imshow(frames[0][:,:,9:12])
+                im = plt.imshow(frames[0][:,:, (stacked_frames-1):(stacked_frames-1 + channels)], cmap=cmap)
                 def animate(i):
-                    im.set_array(frames[i][:,:,9:12])
+                    im.set_array(frames[i][:,:,(stacked_frames-1):(stacked_frames-1 + channels)])
                     return im,
                 anim = animation.FuncAnimation(fig, animate, frames=len(frames))
 
