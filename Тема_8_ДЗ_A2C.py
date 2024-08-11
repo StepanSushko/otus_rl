@@ -25,8 +25,6 @@
 #     $\quad \quad \theta^{V'} \gets \tau \theta^V + (1 - \tau) \theta^{V'}$, </br>
 #     $\quad \quad \theta^{\mu'} \gets \tau \theta^{\mu} + (1 - \tau) \theta^{\mu'}$
 
-# %% [markdown]
-# # Imports
 
 # %%
 import matplotlib.pyplot as plt
@@ -37,10 +35,19 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+#import matplotlib
+from IPython.display import HTML
+import os
+import datetime
 
 from tqdm import tqdm, trange
 gym.__version__
 
+
+# %% [markdown]
+# # Imports
+
+torch.cuda.is_available()
 
 # %% Simple CNN
 
@@ -297,6 +304,10 @@ class ActorNet(nn.Module):
         self.acceleration = nn.Linear( in_features = 64, out_features = 1)
         self.brake = nn.Linear( in_features = 64, out_features = 1)
         
+        self.mu = nn.Linear(64, 3) 
+        self.sigma = nn.Linear(64, 3)
+        self.distribution = torch.distributions.Normal
+        
     def forward(self, s):
         outs = self.hidden(s)
         outs = F.relu(outs)
@@ -314,13 +325,27 @@ class ActorNet(nn.Module):
         outs = torch.flatten( outs, 1 )
         
         outs = self.hidden_linear( outs )
+        outs = F.relu(outs)
         
-        steering     = F.tanh(    self.steering(outs) )/4.0 #- F.tanh(    self.steering2(outs) )
+        #outs = torch.clamp(outs[:, 0], -1, 1)
+        #outs = torch.clamp(outs[:, 1:], 0, 0.1)
         
-        acceleration = F.sigmoid( self.acceleration(outs) )/10.0
-        brake        = F.sigmoid( self.brake(outs) )/1000.0
+        mu = self.mu(outs)
+        mu_s    = F.tanh(mu[:, 0])/2 # * 2
+        mu_a    = F.sigmoid(mu[:, 1])/10.0 # * 2
+        mu_b    = F.sigmoid(mu[:, 2])/1000.0 # * 2
+        mu = torch.stack([mu_s, mu_a, mu_b], dim=1)
         
-        return steering, acceleration, brake
+        sigma = F.softplus(self.sigma(outs)) + 1e-5
+        
+        dist = self.distribution(mu.view(1, 3).data, sigma.view(1, 3).data)
+        #dist = self.distribution(mu.view(3, ).data, sigma.view(3, ).data)
+        
+        #steering     = F.tanh(    self.steering(outs) )/4.0 #- F.tanh(    self.steering2(outs) )
+        #acceleration = F.sigmoid( self.acceleration(outs) )/10.0
+        #brake        = F.sigmoid( self.brake(outs) )/1000.0
+        
+        return dist #steering, acceleration, brake
 
 class ValueNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
@@ -388,7 +413,7 @@ def weights_init_uniform_rule(m):
 
 # %%
 device
-
+# %%
 class OrnsteinUhlenbeckActionNoise:
     def __init__(self, mu, sigma, theta=.15, dt=1e-2, x0=None):
         self.theta = theta
@@ -406,7 +431,7 @@ class OrnsteinUhlenbeckActionNoise:
     def reset(self):
         self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
 
-ou_action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.05)
+ou_action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.25)
 
 # %%
 
@@ -439,30 +464,30 @@ def pick_sample(s, episode_, stochastic_policy = False):
         s_batch = s_batch_tensor.unsqueeze(0).clone().detach().to(device) # s_batch.size()
         #s_batch = torch.tensor(s_batch_tensor.unsqueeze(0), dtype=torch.float).to(device) # s_batch.size()
 
-        if False:
-            
-            a_steering, a_acceleration, a_brake = actor_func(s_batch) # s_batch.shape
-            
-            sigma = tf.squeeze(self.sigma)
-            sigma = tf.nn.softplus(self.sigma) + 1e-5
-            
-            normal_dist = tf.contrib.distributions.Normal(self.mu, self.sigma)
-            action = self.normal_dist._sample_n(1)
-
         if True:
+            
+            dist = actor_func(s_batch)
+            #dist.scale
+            action = dist.sample()#.numpy()
+            log_prob = dist.log_prob(action[0])
+            #action
+            
+            return action.cpu().numpy()[0, :], s_batch_tensor, (log_prob[0,0] + log_prob[0,1] + log_prob[0,2]).unsqueeze(0)
+
+        if False:
             a_steering, a_acceleration, a_brake = actor_func(s_batch) # s_batch.shape
             
-            std_ = 0.0 # !!! * .995**(episode_)
+            std_ = 0.5 * .995**(episode_)  # 0.05 * .995**(500)
             
-            a_steering = a_steering.cpu().numpy() + rng.normal(0, std_) # random.randint(-100, 100)/100 #ou_action_noise()
+            a_steering = a_steering.cpu().numpy() + ou_action_noise() # random.randint(-100, 100)/100 #ou_action_noise()
             a_acceleration = a_acceleration.cpu().numpy() + rng.normal(0, std_) # random.randint(-100, 100)/100 ou_action_noise()
-            a_brake = a_brake.cpu().numpy() + rng.normal(0, std_) # random.randint(-100, 100)/100  #ou_action_noise()
+            a_brake = a_brake.cpu().numpy() #+ rng.normal(0, std_) # random.randint(-100, 100)/100  #ou_action_noise()
             
 
             #print( "   a_steering = ", a_steering, "  a_acceleration = ", a_acceleration, "  a_brake = ", a_brake)
             
             #a_steering = np.clip(a_steering, -0.3, 0.3)
-            #a_acceleration = np.clip(a_acceleration, 0.0, 0.1)
+            a_acceleration = np.clip(a_acceleration, 0.0, 0.1)
             #if a_acceleration.tolist()[0][0] < 0.1: 
             #     a_acceleration = 0.1
             #else:
@@ -470,6 +495,8 @@ def pick_sample(s, episode_, stochastic_policy = False):
 
             #a_brake = np.clip(a_brake, 0.0, 0.0)
             
+            return [a_steering.tolist()[0][0], a_acceleration.tolist()[0][0], a_brake.tolist()[0][0]], s_batch_tensor #a.tolist()[0]
+        
         if False:    
             steering, acceleration, brake = actor_func(s_batch)
             
@@ -486,37 +513,40 @@ def pick_sample(s, episode_, stochastic_policy = False):
             a_brake = torch.multinomial(probs_brake, num_samples=1)
         
         # Return
-        return [a_steering.tolist()[0][0], a_acceleration.tolist()[0][0], a_brake.tolist()[0][0]], s_batch_tensor #a.tolist()[0]
+        
 
 
 # %%
+
+stacked_frames = 5
+channels = 1
+
 env = gym.make("CarRacing-v2")  # среда
-env = ImageEnv_GrayScaled(env)
+env = ImageEnv_GrayScaled(
+    env,
+    skip_frames = 5,
+    stack_frames = stacked_frames,
+    initial_no_op = 50)
 env.observation_space
 
-# %%
-env.action_space
 
 
 # %%
-
-stacked_frames = 10
-channels = 1
 
 # create a new model with these weights
 actor_func = ActorNet( frames_number = stacked_frames, channels=channels )
-actor_func.apply(weights_init_uniform_rule)
+actor_func.apply(weights_init_uniform_rule) # !!!!
 actor_func        = actor_func.to(device)
-actor_target_func = actor_func.to(device)
+actor_target_func = ActorNet( frames_number = stacked_frames, channels=channels ).to(device)
 
 # Подгрузить в целевую сеть коэффициенты из сети политики
 actor_target_func.load_state_dict(actor_func.state_dict())
 
 
-value_func = ValueNet()
+value_func = ValueNet( frames_number = stacked_frames, channels=channels )
 value_func.apply(weights_init_uniform_rule)
-value_func = ValueNet().to(device)
-value_target_func = ValueNet().to(device)
+value_func = value_func.to(device)
+value_target_func = ValueNet(frames_number = stacked_frames, channels=channels).to(device)
 
 # Подгрузить в целевую сеть коэффициенты из сети политики
 value_target_func.load_state_dict(value_func.state_dict())
@@ -538,14 +568,11 @@ i = 0
 cum_reward_ = 0
 first_action = 0
 
-#import matplotlib
-from IPython.display import HTML
-import os
-import datetime
+
 
 # Create directory once
 timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-folder_name = './gif_animations/' + timestamp
+folder_name = './gif_animations/A2C/' + timestamp
 os.makedirs(folder_name, exist_ok=True)                
                 
 
@@ -575,13 +602,15 @@ for i in range(num_episodes):
         # пока не достигнем конечного состояния продолжаем выполнять действия
         episode_len = 0
         frames = []
+        log_probs = []
         while not done:
             # добавить состояние в список состояний
             #states.append(s.tolist())
             
             # по текущей политике получить действие
-            a, s_prepared = pick_sample(s, i)
+            a, s_prepared, log_prob = pick_sample(s, i)
             states.append(s_prepared.tolist()) # states.size()
+            log_probs.append(log_prob)
             
             # выполнить шаг, получить награду (r), следующее состояние (s) и флаги конечного состояния (term, trunc)
             s, r, term, trunc, _ = env.step(a) # s.shape
@@ -596,7 +625,7 @@ for i in range(num_episodes):
             episode_len = episode_len + 1
             
             # Terminate failed episodes
-            if (len([reward for reward in rewards[-15:] if reward > 0]) == 0) and (len(rewards) > 15):
+            if (len([reward for reward in rewards[-100:] if reward > 0]) == 0) and (len(rewards) > 100):
                 #rewards.append( - 200.0 )
                 rewards.append(r)
                 done = True
@@ -653,10 +682,11 @@ for i in range(num_episodes):
         opt2.zero_grad()
         # преобразуем к тензорам
         actions = torch.tensor(actions, dtype=torch.float64).to(device) # actions.size()
-        # считаем advantage функцию
-        advantages = cum_rewards - values # A(s,a) = Q(s,a) - V(s)
-
         
+        # считаем advantage функцию
+        advantages = cum_rewards - values[:,0] # A(s,a) = Q(s,a) - V(s)
+        advantages = torch.tensor(advantages, dtype=torch.float64).to(device)#.unsqueeze(1) # advantages.size()
+        #advantages
         
         #logits = actor_func(states)
         # states_normalized.size()
@@ -670,7 +700,7 @@ for i in range(num_episodes):
         #states_tensor = torch.tensor(states_tensor, dtype=torch.float).to(device)
 
         
-        logits_steering, logits_acceleration, logits_brake = actor_func(states) # logits
+        #logits_steering, logits_acceleration, logits_brake = actor_func(states) # logits
         
         #logits_steering = torch.clamp(logits_steering, -0.3, 0.3)
 
@@ -684,18 +714,20 @@ for i in range(num_episodes):
                 
         #logits_brake = torch.clamp(logits_brake, 0.0, 0.0)
             
-        logits = torch.cat((logits_steering, logits_acceleration, logits_brake), dim=1)
+        #logits = torch.cat((logits_steering, logits_acceleration, logits_brake), dim=1)
         #logits.requires_grad_(True)
         
-            
+        log_probs = torch.cat(log_probs, dim=0)
+        log_probs.requires_grad_(True)    
+        
         #logits = torch.tensor(logits, dtype=torch.int64).to(device)
         
         # [steering,acceleration, brake].shape() actions.size()
-        log_probs = F.cross_entropy( 
-            logits, 
-            actions, 
-            reduction="none")
-        pi_loss = log_probs * advantages  # log_probs.size()  advantages.size()
+        #log_probs = F.cross_entropy( 
+        #    logits, 
+        #    actions, 
+        #    reduction="none")
+        pi_loss = - advantages * log_probs  #  !!! log_probs should be one dimensional ???  log_probs.size()  advantages.size()
         
         # считаем градиент
         pi_loss_records.append(pi_loss.sum().tolist())
@@ -734,7 +766,10 @@ for i in range(num_episodes):
             " Pi_loss =", round( pi_loss_records[-1:][0], 2), 
             " Episode_len =", episode_len,
             #"  \na =", actions[0:4]
-            "             a = " + " ".join(str(a) for a in actions[0:10])
+                "\n" +    "".join( 
+                "     ".join(str([ round(  a, 2) for a in np.array(action)]) + "\n" for action in actions.cpu()[i:i+1]) # actions[0]
+                for i in range(0,100,10)
+            )
             )
         
         
@@ -748,15 +783,6 @@ for i in range(num_episodes):
                   end="\n\n\n")
             
         if i % 10 == 0:
-            if False:
-                #s, info = env.reset()
-                print(s.shape)
-
-                plt.figure(figsize=(5, 5))
-                plt.imshow(s)
-                plt.axis('off')
-                plt.show()
-                
             if True:
                 # Create animation
                 if channels == 1:
