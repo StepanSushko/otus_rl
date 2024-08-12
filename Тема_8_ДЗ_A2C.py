@@ -107,7 +107,7 @@ if False:
 import cv2
 
 def preprocess(img):
-    #img = img[:84, 6:90] # CarRacing-v2-specific cropping
+    img = img[:84, 6:90] # CarRacing-v2-specific cropping
     # img = cv2.resize(img, dsize=(84, 84)) # or you can simply use rescaling
     
     # Remove all green squares
@@ -276,7 +276,7 @@ class ImageEnv_GrayScaled(gym.Wrapper):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 
-class ActorNet(nn.Module):
+class ActorCriticNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
         super().__init__()
 
@@ -291,7 +291,7 @@ class ActorNet(nn.Module):
         
         #self.hidden4 = nn.Linear( in_features = 32*11*11, out_features = 11*11)
         #self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
-        self.hidden_linear = nn.Linear( in_features = 576, out_features = 64)
+        self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
         
         #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3) 
         # #nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3)
@@ -304,8 +304,9 @@ class ActorNet(nn.Module):
         self.acceleration = nn.Linear( in_features = 64, out_features = 1)
         self.brake = nn.Linear( in_features = 64, out_features = 1)
         
-        self.mu = nn.Linear(64, 3) 
+        self.mu    = nn.Linear(64, 3) 
         self.sigma = nn.Linear(64, 3)
+        self.value = nn.Linear(64, 1)
         self.distribution = torch.distributions.Normal
         
     def forward(self, s):
@@ -330,13 +331,15 @@ class ActorNet(nn.Module):
         #outs = torch.clamp(outs[:, 0], -1, 1)
         #outs = torch.clamp(outs[:, 1:], 0, 0.1)
         
-        mu = self.mu(outs)
+        mu      = self.mu(outs)
         mu_s    = F.tanh(mu[:, 0])/2 # * 2
         mu_a    = F.sigmoid(mu[:, 1])/10.0 # * 2
         mu_b    = F.sigmoid(mu[:, 2])/1000.0 # * 2
         mu = torch.stack([mu_s, mu_a, mu_b], dim=1)
         
-        sigma = F.softplus(self.sigma(outs)) + 1e-5
+        sigma = (F.softplus(self.sigma(outs)) + 1e-5)/10.0
+        
+        state_value = self.value(outs)
         
         dist = self.distribution(mu.view(1, 3).data, sigma.view(1, 3).data)
         #dist = self.distribution(mu.view(3, ).data, sigma.view(3, ).data)
@@ -345,53 +348,14 @@ class ActorNet(nn.Module):
         #acceleration = F.sigmoid( self.acceleration(outs) )/10.0
         #brake        = F.sigmoid( self.brake(outs) )/1000.0
         
-        return dist #steering, acceleration, brake
-
-class ValueNet(nn.Module):
-    def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
-        super().__init__()
-        
-        #self.hidden = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3) 
-
-        #self.hidden = nn.Conv2d(in_channels=3, out_channels=hidden_dim, kernel_size=3) #nn.Linear( in_features = 96*96*3, out_features = hidden_dim)
-        
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
-        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
-        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        
-        #self.hidden_linear = nn.Linear( in_features = 64*5*5, out_features = 4*5*5)
-        self.hidden_linear = nn.Linear( in_features = 576, out_features = 64)
-        
-        
-        self.output_linear = nn.Linear( in_features = 64, out_features = 1)
-
-        #self.hidden = nn.Linear(96*96*3, hidden_dim)
-        #self.output = nn.Linear(hidden_dim, 1)
-
-    def forward(self, s):
-        
-        outs = self.hidden(s)
-        outs = F.relu(outs)
-        outs = self.hidden2(outs)
-        outs = F.relu(outs)
-        outs = self.hidden3(outs)
-        outs = F.relu(outs)
-        outs = self.hidden4(outs)
-        outs = F.relu(outs)
-        #outs = self.hidden5(outs)
-        #outs = F.relu(outs)
-        #outs = self.hidden6(outs)
-        #outs = F.relu(outs)
+        return dist, state_value  #steering, acceleration, brake
 
         
-        outs = torch.flatten( outs, 1 )
+
         
-        outs = self.hidden_linear( outs )
+
         
-        value = self.output_linear(outs)
+
         
         return value
 
@@ -466,13 +430,13 @@ def pick_sample(s, episode_, stochastic_policy = False):
 
         if True:
             
-            dist = actor_func(s_batch)
+            dist, state_value = actor_critic_func(s_batch)
             #dist.scale
             action = dist.sample()#.numpy()
             log_prob = dist.log_prob(action[0])
             #action
             
-            return action.cpu().numpy()[0, :], s_batch_tensor, (log_prob[0,0] + log_prob[0,1] + log_prob[0,2]).unsqueeze(0)
+            return action.cpu().numpy()[0, :], s_batch_tensor, (log_prob[0,0] + log_prob[0,1] + log_prob[0,2]).unsqueeze(0), state_value[0]
 
         if False:
             a_steering, a_acceleration, a_brake = actor_func(s_batch) # s_batch.shape
@@ -515,6 +479,25 @@ def pick_sample(s, episode_, stochastic_policy = False):
         # Return
         
 
+def update(log_probs, state_values, returns ):
+
+    """ Обновляет веса сети исполнитель–критик на основе переданных ... обучающих примеров
+... @param returns: доход (накопительное вознаграждение) на ... каждом шаге эпизода
+... @param log_probs: логарифм вероятности на каждом шаге ... @param state_values: ценности состояний на каждом шаге
+"""
+    loss = 0
+    for log_prob, value, Gt in zip(log_probs, state_values, returns):
+        
+        advantage = Gt - value.item()
+        policy_loss = -log_prob * advantage
+        value_loss = F.smooth_l1_loss(value, Gt)
+        loss += policy_loss + value_loss
+        
+    return loss
+    #self.optimizer.zero_grad()
+    #loss.backward()
+    #self.optimizer.step()
+
 
 # %%
 
@@ -534,32 +517,28 @@ env.observation_space
 # %%
 
 # create a new model with these weights
-actor_func = ActorNet( frames_number = stacked_frames, channels=channels )
-actor_func.apply(weights_init_uniform_rule) # !!!!
-actor_func        = actor_func.to(device)
-actor_target_func = ActorNet( frames_number = stacked_frames, channels=channels ).to(device)
+actor_critic_func = ActorCriticNet( frames_number = stacked_frames, channels=channels )
+actor_critic_func.apply(weights_init_uniform_rule) # !!!!
+actor_critic_func        = actor_critic_func.to(device)
+#actor_target_func = ActorNet( frames_number = stacked_frames, channels=channels ).to(device)
 
 # Подгрузить в целевую сеть коэффициенты из сети политики
-actor_target_func.load_state_dict(actor_func.state_dict())
+#actor_target_func.load_state_dict(actor_func.state_dict())
 
 
-value_func = ValueNet( frames_number = stacked_frames, channels=channels )
-value_func.apply(weights_init_uniform_rule)
-value_func = value_func.to(device)
-value_target_func = ValueNet(frames_number = stacked_frames, channels=channels).to(device)
 
 # Подгрузить в целевую сеть коэффициенты из сети политики
-value_target_func.load_state_dict(value_func.state_dict())
+#value_target_func.load_state_dict(value_func.state_dict())
 
-gamma = 0.99  # дисконтирование
+gamma = 0.95  # !!! дисконтирование
 #env = gym.make("CartPole-v1")  # среда
 reward_records = []  # массив наград
 v_loss_records = []
 pi_loss_records = []
 
 # Оптимизаторы
-opt1 = torch.optim.AdamW(value_func.parameters(), lr=0.0005) # !!! greater lr ?
-opt2 = torch.optim.AdamW(actor_func.parameters(), lr=0.0005)
+opt1 = torch.optim.AdamW(actor_critic_func.parameters(), lr=0.0005) # !!! greater lr ?
+#opt2 = torch.optim.AdamW(actor_func.parameters(), lr=0.0005)
 
 # количество циклов обучения
 num_episodes = 3600
@@ -575,7 +554,7 @@ timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 folder_name = './gif_animations/A2C/' + timestamp
 os.makedirs(folder_name, exist_ok=True)                
                 
-
+import time
 
 
 #for i in tqdm(range(num_episodes), desc="Episodes", postfix={"Last reward": cum_reward_, "First action": first_action}):
@@ -592,6 +571,10 @@ for i in range(num_episodes):
         states = [] 
         actions = []
         rewards = []
+        state_values = []
+        # Episode compuation time
+        start_time = time.time()
+    
         s, info = env.reset() # s.shape
         
         #frames = []  zooming cut
@@ -608,7 +591,9 @@ for i in range(num_episodes):
             #states.append(s.tolist())
             
             # по текущей политике получить действие
-            a, s_prepared, log_prob = pick_sample(s, i)
+            a, s_prepared, log_prob, state_value = pick_sample(s, i)
+            a = a.clip( env.action_space.low, env.action_space.high)
+            
             states.append(s_prepared.tolist()) # states.size()
             log_probs.append(log_prob)
             
@@ -621,6 +606,7 @@ for i in range(num_episodes):
             
             # добавляем действие и награду в соответствующие массивы
             actions.append(a)
+            state_values.append(state_value)
             
             episode_len = episode_len + 1
             
@@ -633,7 +619,7 @@ for i in range(num_episodes):
                 rewards.append(r)
 
 
-        first_action = actions[0]
+        
         
         #print( "   reward = ", rewards[-1], "\n" )
 
@@ -653,95 +639,38 @@ for i in range(num_episodes):
         # ! Оптимизируем value loss (Critic)
         # Обнуляем градиенты в оптимизаторе
         opt1.zero_grad()
-        # преобразуем состояния и суммарные награды для каждого состояния в тензор
-        states      = torch.tensor( states, dtype=torch.float).to(device) # states.size()
-        cum_rewards = torch.tensor( cum_rewards, dtype=torch.float).to(device) # cum_rewards.size()
 
-        # Вычисляем лосс
-        values = value_func(states) # values.size()
-        values = values.squeeze(dim=1)
-        vf_loss = F.mse_loss(
-            values,
-            cum_rewards,
-            reduction="none")
-        # считаем градиенты This function accumulates gradients in the leaves - you might need to zero .grad attributes or set them to None before calling it.
-        v_loss_records.append(vf_loss.sum().tolist())
-        vf_loss.sum().backward()
+        #loss = update(log_probs, state_values, cum_rewards )
         
-        # делаем шаг (одну итерацию) оптимизатора 
-        opt1.step()
-
-        # обновляем параметры сети
-        with torch.no_grad():
-            values = value_func(states)
-
-
-
-        # ! Оптимизируем ACTOR loss (обновляем параметры сети)
-        # Обнуляем градиенты
-        opt2.zero_grad()
-        # преобразуем к тензорам
-        actions = torch.tensor(actions, dtype=torch.float64).to(device) # actions.size()
         
-        # считаем advantage функцию
-        advantages = cum_rewards - values[:,0] # A(s,a) = Q(s,a) - V(s)
-        advantages = torch.tensor(advantages, dtype=torch.float64).to(device)#.unsqueeze(1) # advantages.size()
-        #advantages
-        
-        #logits = actor_func(states)
-        # states_normalized.size()
-        #states_normalized = states / 255.0  # Normalizing to [0, 1] range
-
-        # Convert the observation to a PyTorch tensor
-        # NCHW stands for: batch N, channels C, depth D, height H, width W
-        # from 96x96x3 to 3x96x96 (3 - channels, 96 - height, 96 - width)  three channel picture
-        #states_tensor = states_normalized.permute(2, 0, 1).unsqueeze(0)  # Assuming NHWC to NCHW format
-        
-        #states_tensor = torch.tensor(states_tensor, dtype=torch.float).to(device)
-
-        
-        #logits_steering, logits_acceleration, logits_brake = actor_func(states) # logits
-        
-        #logits_steering = torch.clamp(logits_steering, -0.3, 0.3)
-
-        #logits_acceleration = torch.clamp(logits_acceleration, 0.0, 0.1)
-        #for k in range(len(logits_acceleration)):
-        #    if logits_acceleration[k][0] < 0.1: 
-        #       logits_acceleration[k][0] = 0.1
-        #    else:
-        #        logits_acceleration[k][0] = 0.0
-        #logits_acceleration.requires_grad_(True)
-                
-        #logits_brake = torch.clamp(logits_brake, 0.0, 0.0)
-            
-        #logits = torch.cat((logits_steering, logits_acceleration, logits_brake), dim=1)
-        #logits.requires_grad_(True)
         
         log_probs = torch.cat(log_probs, dim=0)
-        log_probs.requires_grad_(True)    
+        log_probs.requires_grad_(True)
         
-        #logits = torch.tensor(logits, dtype=torch.int64).to(device)
+        state_values = torch.cat(state_values, dim=0)
+        state_values.requires_grad_(True)
         
-        # [steering,acceleration, brake].shape() actions.size()
-        #log_probs = F.cross_entropy( 
-        #    logits, 
-        #    actions, 
-        #    reduction="none")
-        pi_loss = - advantages * log_probs  #  !!! log_probs should be one dimensional ???  log_probs.size()  advantages.size()
+        cum_rewards = torch.tensor( cum_rewards, dtype=torch.float).to(device) # cum_rewards.size()
         
-        # считаем градиент
-        pi_loss_records.append(pi_loss.sum().tolist())
-        pi_loss.sum().backward()
+        loss = 0 #  log_prob, value, Gt = log_probs[0], state_values[0], cum_rewards[0]
+        for log_prob, value, Gt in zip(log_probs, state_values, cum_rewards):
+            
+            advantage = Gt - value.item()
+            policy_loss = -log_prob * advantage
+            value_loss = F.smooth_l1_loss(value, Gt)
+            loss += policy_loss + value_loss
+        
+        loss.backward()
+        
+        
         
         # делаем шаг оптимизатора
-        opt2.step()
+        opt1.step()
 
 
 
         # Выводим итоговую награду в эпизоде  
         reward_records.append(sum(rewards))
-        
-        
         cum_reward_ = sum(rewards)
 
         #print( "  i =", i, "  episode_len =", episode_len, "  reward =", cum_reward_, "\n" )
@@ -760,26 +689,31 @@ for i in range(num_episodes):
             
         #t.update()
         
+        end_time = time.time()
+        computation_time = end_time - start_time
              
         print ( "  Reward  =", round( reward_records[-1:][0], 2),
-            " V_loss =", round(  v_loss_records[-1:][0], 2),
-            " Pi_loss =", round( pi_loss_records[-1:][0], 2), 
+            #" V_loss =", round(  v_loss_records[-1:][0], 2),
+            #" Pi_loss =", round( pi_loss_records[-1:][0], 2), 
+            " loss =", round( loss.cpu().tolist(), 2), 
             " Episode_len =", episode_len,
+            " Computation time:", round(computation_time/60, 2), " minutes",
             #"  \na =", actions[0:4]
                 "\n" +    "".join( 
-                "     ".join(str([ round(  a, 2) for a in np.array(action)]) + "\n" for action in actions.cpu()[i:i+1]) # actions[0]
-                for i in range(0,100,10)
+                "     ".join(str([ round(  a, 2) for a in np.array(action)]) + "\n" for action in actions[i:i+1]) # actions[0]
+                for i in range(0,200,20)
             )
             )
         
         
         
         if i % 5 == 0:
-            print("\nRun episode {} with average Reward {} V_loss = {} Pi_loss = {}".format(
+            print("\nRun episode {} with average Reward {} ".format(
                 i, 
                 round(np.mean(reward_records[-20:]), 2), 
-                round(np.mean(v_loss_records[-20:]), 2), 
-                round(np.mean(pi_loss_records[-20:])), 2), 
+                #round(np.mean(v_loss_records[-20:]), 2), 
+                #round(np.mean(pi_loss_records[-20:])), 2), 
+            ),
                   end="\n\n\n")
             
         if i % 10 == 0:
