@@ -280,34 +280,49 @@ class ActorCriticNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
         super().__init__()
 
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
-        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
-        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        #self.hidden5 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride = 1) # (64* 5*5)
-        #self.hidden6 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride = 1) # (128, 3, 3)
+        # Variant 1  (DQN)
+        if False:
+            self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=8, stride=4) 
+            self.hidden2 = nn.Conv2d(in_channels=16,                    out_channels=32, kernel_size=4, stride=2)  # (8, 47, 47) 
+            self.in_features = 32 * 9 * 9
+            self.fc1 = nn.Linear(self.in_features, 256)
+            #self.fc2 = nn.Linear(256, action_dim)
         
-        #self.hidden4 = nn.Linear( in_features = 32*11*11, out_features = 11*11)
-        #self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
-        self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
+        # Variant 2.1   "Racetrack Navigation on OpenAIGym with Deep Reinforcement Learning"" (DDQN)
+        if False:
+            self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=32, kernel_size=8, stride=4) 
+            self.hidden2 = nn.Conv2d(in_channels=32,                    out_channels=64, kernel_size=4, stride=2)  # (8, 47, 47) 
+            self.hidden3 = nn.Conv2d(in_channels=64,                    out_channels=64, kernel_size=3, stride=1)  # (8, 47, 47) 
+            self.hidden_linear = nn.Linear( in_features = 512, out_features = 64)
+            #Dense Size 1024 (no activation!)
         
-        #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3) 
-        # #nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3)
+        # Variant 2.2 Larger and better than Variant 2.1  "Racetrack Navigation on OpenAIGym with Deep Reinforcement Learning"" (DDQN)
+        if True:
+            self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=64,  kernel_size=8, stride=4) 
+            self.hidden2 = nn.Conv2d(in_channels=64,                    out_channels=128, kernel_size=4, stride=2)  # (8, 47, 47) 
+            self.hidden3 = nn.Conv2d(in_channels=128,                   out_channels=128, kernel_size=3, stride=1)  # (8, 47, 47) 
+            self.hidden_linear = nn.Linear( in_features = 6272, out_features = 128)
         
-        #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3)
+        # Variant 2.3 Even Larger and better than Variant 2.1  "Racetrack Navigation on OpenAIGym with Deep Reinforcement Learning"" (DDQN)
+        if False:
+            self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=128,  kernel_size=8, stride=4) 
+            self.hidden2 = nn.Conv2d(in_channels=128,                    out_channels=256, kernel_size=4, stride=2)  # (8, 47, 47) 
+            self.hidden3 = nn.Conv2d(in_channels=256,                    out_channels=256, kernel_size=3, stride=1)  # (8, 47, 47) 
+            self.hidden_linear = nn.Linear( in_features = 1024*2, out_features = 64)
         
-        self.steering = nn.Linear( in_features = 64, out_features = 1)
-        self.steering2 = nn.Linear( in_features = 64, out_features = 1)
-          
-        self.acceleration = nn.Linear( in_features = 64, out_features = 1)
-        self.brake = nn.Linear( in_features = 64, out_features = 1)
+        #Flatten
+        #Dense Size 1024 (no activation!)
+
+        #self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
+        #self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
         
-        self.mu    = nn.Linear(64, 3) 
-        self.sigma = nn.Linear(64, 3)
-        self.value = nn.Linear(64, 1)
+        self.mu    = nn.Linear(128, 3) 
+        self.sigma = nn.Linear(128, 3)
         self.distribution = torch.distributions.Normal
+        
+        self.value = nn.Linear(128, 1)
+        
+        
         
     def forward(self, s):
         outs = self.hidden(s)
@@ -316,8 +331,8 @@ class ActorCriticNet(nn.Module):
         outs = F.relu(outs)
         outs = self.hidden3(outs)
         outs = F.relu(outs)
-        outs = self.hidden4(outs)
-        outs = F.relu(outs)
+
+        
         #outs = self.hidden5(outs)
         #outs = F.relu(outs)
         #outs = self.hidden6(outs)
@@ -326,7 +341,7 @@ class ActorCriticNet(nn.Module):
         outs = torch.flatten( outs, 1 )
         
         outs = self.hidden_linear( outs )
-        outs = F.relu(outs)
+        #outs = F.relu(outs)
         
         #outs = torch.clamp(outs[:, 0], -1, 1)
         #outs = torch.clamp(outs[:, 1:], 0, 0.1)
@@ -335,7 +350,7 @@ class ActorCriticNet(nn.Module):
         mu_s    = F.tanh(mu[:, 0])/2 # * 2
         mu_a    = F.sigmoid(mu[:, 1])/10.0 # * 2
         mu_b    = F.sigmoid(mu[:, 2])/1000.0 # * 2
-        mu = torch.stack([mu_s, mu_a, mu_b], dim=1)
+        mu      = torch.stack([mu_s, mu_a, mu_b], dim=1)
         
         sigma = (F.softplus(self.sigma(outs)) + 1e-5)/10.0
         
@@ -501,13 +516,13 @@ def update(log_probs, state_values, returns ):
 
 # %%
 
-stacked_frames = 5
+stacked_frames = 10
 channels = 1
 
 env = gym.make("CarRacing-v2")  # среда
 env = ImageEnv_GrayScaled(
     env,
-    skip_frames = 5,
+    skip_frames = 3,
     stack_frames = stacked_frames,
     initial_no_op = 50)
 env.observation_space
