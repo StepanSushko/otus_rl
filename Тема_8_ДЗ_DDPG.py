@@ -129,17 +129,19 @@ class QNet(nn.Module):
         # N=(W-F+2P)/S+1 где N: размер вывода W: размер ввода F: размер ядра свертки P: размер значения заполнения S: размер шага
         
         self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        self.maxpool = nn.MaxPool2d(2, stride=2)
+        
         self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
+        self.maxpool2 = nn.MaxPool2d(2, stride=1)
+        
         self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
         self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
         
         #self.hidden_linear = nn.Linear( in_features = 64*5*5, out_features = 4*5*5)
-        self.hidden_linear = nn.Linear( in_features = 256, out_features = 32)
-        self.hidden_linear2 = nn.Linear( in_features = 32 + 3, out_features = 16)
+        self.hidden_linear = nn.Linear( in_features = 32, out_features = 4)
+        self.hidden_linear2 = nn.Linear( in_features = 4 + 3, out_features = 7)
         
-        self.output_linear = nn.Linear( in_features = 16, out_features = 1)
+        self.output_linear = nn.Linear( in_features = 7, out_features = 1)
 
         #self.hidden = nn.Linear(96*96*3, hidden_dim)
         #self.output = nn.Linear(hidden_dim, 1)
@@ -148,17 +150,14 @@ class QNet(nn.Module):
         
         outs = self.hidden(s)
         outs = F.relu(outs)
+        outs = self.maxpool(outs)
+        
         outs = self.hidden2(outs)
         outs = F.relu(outs)
+        outs = self.maxpool2(outs)
+        
         outs = self.hidden3(outs)
         outs = F.relu(outs)
-        outs = self.hidden4(outs)
-        outs = F.relu(outs)
-        #outs = self.hidden5(outs)
-        #outs = F.relu(outs)
-        #outs = self.hidden6(outs)
-        #outs = F.relu(outs)
-
         
         outs = torch.flatten( outs, 1 )
         
@@ -181,43 +180,33 @@ class PolicyNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
         super().__init__()
 
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
+        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) 
+        self.maxpool = nn.MaxPool2d(2, stride=2)
         self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        #self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=4, kernel_size=3, stride = 2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        #self.hidden2 = nn.Conv2d(in_channels=4, out_channels=16, kernel_size=3, stride = 2)  # (8, 47, 47) 
+        self.maxpool2 = nn.MaxPool2d(2, stride=1)
+        
         self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
         self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        #self.hidden5 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride = 1) # (64* 5*5)
-        #self.hidden6 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride = 1) # (128, 3, 3)
         
-        #self.hidden4 = nn.Linear( in_features = 32*11*11, out_features = 11*11)
-        #self.hidden_linear = nn.Linear( in_features = 256, out_features = 64)
-        self.hidden_linear = nn.Linear( in_features = 576, out_features = 64)
+        self.hidden_linear = nn.Linear( in_features = 32, out_features = 32)
         
-        #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3) 
-        # #nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3)
-        
-        #self.output = nn.Linear( in_features = hidden_dim*94*94, out_features = 3)
-        
-        self.steering = nn.Linear( in_features = 64, out_features = 1)
-        self.steering2 = nn.Linear( in_features = 64, out_features = 1)
+        self.steering = nn.Linear( in_features = 32, out_features = 1)
+        self.steering2 = nn.Linear( in_features = 32, out_features = 1)
           
-        self.acceleration = nn.Linear( in_features = 64, out_features = 1)
-        self.brake = nn.Linear( in_features = 64, out_features = 1)
+        self.acceleration = nn.Linear( in_features = 32, out_features = 1)
+        self.brake = nn.Linear( in_features = 32, out_features = 1)
         
     def forward(self, s):
         outs = self.hidden(s)
         outs = F.relu(outs)
+        outs = self.maxpool(outs)
+        
         outs = self.hidden2(outs)
         outs = F.relu(outs)
+        outs = self.maxpool2(outs)
+        
         outs = self.hidden3(outs)
         outs = F.relu(outs)
-        outs = self.hidden4(outs)
-        outs = F.relu(outs)
-        #outs = self.hidden5(outs)
-        #outs = F.relu(outs)
-        #outs = self.hidden6(outs)
-        #outs = F.relu(outs)
 
         outs = torch.flatten( outs, 1 )
         
@@ -447,7 +436,7 @@ os.makedirs(folder_name, exist_ok=True)
 
 reward_records = []
 
-episodes_number = 1000
+episodes_number = 5000
 episode = 0
 
 if False:
@@ -456,7 +445,7 @@ if False:
 
 # %%
 
-batch_size = 250
+batch_size = 2500
 
 while episode < episodes_number:
     # Run episode till done
