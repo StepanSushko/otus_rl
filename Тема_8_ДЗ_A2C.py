@@ -9,6 +9,7 @@
 
 # %% [markdown]
 # ## Реализация:
+
 # 1. Инициализируем случайным образом сети политики (actor) $\pi^{\mu}(a|s)|_{\theta^{\mu}}$ и V-функции (critic) $V^{\theta}(s)|_{\theta^{V}}$ с весами $\theta^V$ и $\theta^{\mu}$ и целевые сети $V'$ и $\pi'$: $\theta^{V'} \gets \theta^V$ и $\theta^{\mu'} \gets \theta^{\mu}$
 # 2. Устанавливаем число эпизодов обучения $M$ и для каждого эпизода выполняем:
 # 3. Проходим траекторию, пока не достигнем конечного состояния.
@@ -350,20 +351,20 @@ class ActorCriticNet(nn.Module):
         mu_s    = F.tanh(mu[:, 0])/2 # * 2
         mu_a    = F.sigmoid(mu[:, 1])/10.0 # * 2
         mu_b    = F.sigmoid(mu[:, 2])/1000.0 # * 2
-        mu      = torch.stack([mu_s, mu_a, mu_b], dim=1)
+        #mu      = torch.stack([mu_s, mu_a, mu_b], dim=1)
         
         sigma = (F.softplus(self.sigma(outs)) + 1e-5)/10.0
         
         state_value = self.value(outs)
         
-        dist = self.distribution(mu.view(1, 3).data, sigma.view(1, 3).data)
+        #dist = self.distribution(mu.view(1, 3).data, sigma.view(1, 3).data)
         #dist = self.distribution(mu.view(3, ).data, sigma.view(3, ).data)
         
         #steering     = F.tanh(    self.steering(outs) )/4.0 #- F.tanh(    self.steering2(outs) )
         #acceleration = F.sigmoid( self.acceleration(outs) )/10.0
         #brake        = F.sigmoid( self.brake(outs) )/1000.0
         
-        return dist, state_value  #steering, acceleration, brake
+        return self.distribution( mu_s, sigma[:,0]),self.distribution( mu_a, sigma[:,1]),self.distribution( mu_b, sigma[:,2]), state_value  #steering, acceleration, brake
 
         
 
@@ -445,13 +446,13 @@ def pick_sample(s, episode_, stochastic_policy = False):
 
         if True:
             
-            dist, state_value = actor_critic_func(s_batch)
+            dist_s, dist_a, dist_b, state_value = actor_critic_func(s_batch)
             #dist.scale
-            action = dist.sample()#.numpy()
-            log_prob = dist.log_prob(action[0])
+            action   = torch.stack(  (dist_s.sample(), dist_a.sample(), dist_b.sample()), dim=0) #.numpy()
+            log_prob = torch.stack(  (dist_s.log_prob(action[0,0]), dist_a.log_prob(action[1,0]), dist_b.log_prob(action[2,0])), dim=0) #.numpy() #dist_s.log_prob(action[0])
             #action
             
-            return action.cpu().numpy()[0, :], s_batch_tensor, (log_prob[0,0] + log_prob[0,1] + log_prob[0,2]).unsqueeze(0), state_value[0]
+            return action[:, 0], s_batch_tensor, (log_prob[0,0] + log_prob[1,0] + log_prob[2,0]).unsqueeze(0), state_value[0]
 
         if False:
             a_steering, a_acceleration, a_brake = actor_func(s_batch) # s_batch.shape
@@ -519,7 +520,10 @@ def update(log_probs, state_values, returns ):
 stacked_frames = 10
 channels = 1
 
-env = gym.make("CarRacing-v2")  # среда
+env = gym.make(
+    "CarRacing-v2", 
+    options={"randomize": False}
+    )  # среда
 env = ImageEnv_GrayScaled(
     env,
     skip_frames = 3,
@@ -556,7 +560,7 @@ opt1 = torch.optim.AdamW(actor_critic_func.parameters(), lr=0.0005) # !!! greate
 #opt2 = torch.optim.AdamW(actor_func.parameters(), lr=0.0005)
 
 # количество циклов обучения
-num_episodes = 3600
+num_episodes = 20000
 i = 0
 
 cum_reward_ = 0
@@ -577,7 +581,17 @@ import time
 
 #with tqdm(total=num_episodes, postfix=[ {"Reward": 0, "V_loss": 0, "Pi_loss": 0}]) as t:
 #    for i in range(num_episodes): i = 0
-for i in range(num_episodes):
+
+# Load model checkpoint
+epoch = 0
+if False:
+    checkpoint = torch.load('./gif_animations/A2C/A2C_agent.pt')
+    actor_critic_func.load_state_dict(checkpoint['model_state_dict'])
+    epoch = checkpoint['epoch']
+
+# %%
+
+for i in range(epoch + 1, num_episodes):
         
         #for i in range(num_episodes):
             
@@ -587,6 +601,7 @@ for i in range(num_episodes):
         actions = []
         rewards = []
         state_values = []
+        
         # Episode compuation time
         start_time = time.time()
     
@@ -607,13 +622,13 @@ for i in range(num_episodes):
             
             # по текущей политике получить действие
             a, s_prepared, log_prob, state_value = pick_sample(s, i)
-            a = a.clip( env.action_space.low, env.action_space.high)
+            a = torch.clamp( a, torch.tensor( env.action_space.low ).to(device), torch.tensor( env.action_space.high ).to(device) )
             
             states.append(s_prepared.tolist()) # states.size()
             log_probs.append(log_prob)
             
             # выполнить шаг, получить награду (r), следующее состояние (s) и флаги конечного состояния (term, trunc)
-            s, r, term, trunc, _ = env.step(a) # s.shape
+            s, r, term, trunc, _ = env.step(a.cpu().tolist()) # s.shape 
             frames.append(s) # !
             
             # если конечное состояние - устанавливаем флаг окончания в True
@@ -626,12 +641,12 @@ for i in range(num_episodes):
             episode_len = episode_len + 1
             
             # Terminate failed episodes
-            if (len([reward for reward in rewards[-100:] if reward > 0]) == 0) and (len(rewards) > 100):
-                #rewards.append( - 200.0 )
-                rewards.append(r)
-                done = True
-            else:
-                rewards.append(r)
+            #if (len([reward for reward in rewards[-100:] if reward > 0]) == 0) and (len(rewards) > 100):
+            #    #rewards.append( - 200.0 )
+            #    rewards.append(r)
+            #    done = True
+            #else:
+            rewards.append(r)
 
 
         
@@ -666,11 +681,12 @@ for i in range(num_episodes):
         state_values.requires_grad_(True)
         
         cum_rewards = torch.tensor( cum_rewards, dtype=torch.float).to(device) # cum_rewards.size()
+        cum_rewards.requires_grad_(True)
         
         loss = 0 #  log_prob, value, Gt = log_probs[0], state_values[0], cum_rewards[0]
         for log_prob, value, Gt in zip(log_probs, state_values, cum_rewards):
             
-            advantage = Gt - value.item()
+            advantage = Gt - value#.item()
             policy_loss = -log_prob * advantage
             value_loss = F.smooth_l1_loss(value, Gt)
             loss += policy_loss + value_loss
@@ -682,11 +698,12 @@ for i in range(num_episodes):
         # делаем шаг оптимизатора
         opt1.step()
 
-
+        v_loss_records.append( loss.item() )
 
         # Выводим итоговую награду в эпизоде  
         reward_records.append(sum(rewards))
         cum_reward_ = sum(rewards)
+        
 
         #print( "  i =", i, "  episode_len =", episode_len, "  reward =", cum_reward_, "\n" )
         
@@ -715,7 +732,7 @@ for i in range(num_episodes):
             " Computation time:", round(computation_time/60, 2), " minutes",
             #"  \na =", actions[0:4]
                 "\n" +    "".join( 
-                "     ".join(str([ round(  a, 2) for a in np.array(action)]) + "\n" for action in actions[i:i+1]) # actions[0]
+                "     ".join(str([ round(  a, 2) for a in np.array(action.cpu().numpy())]) + "\n" for action in actions[i:i+1]) # actions[0]
                 for i in range(0,200,20)
             )
             )
@@ -750,6 +767,57 @@ for i in range(num_episodes):
                 # Save animation to file
                 anim.save(folder_name + '/animation_' + str(i) + '.gif') #, writer='imagemagick')
                 #HTML(anim.to_jshtml())
+                
+                # Plot v_loss_records
+                plt.figure(figsize=(5, 5))
+                plt.plot(v_loss_records)
+                plt.xlabel('i')
+                plt.ylabel('v_loss')
+                plt.title('v_loss vs i')
+                #plt.show()
+                
+                plt.savefig(folder_name + '/v_loss_' + str(i) + '.png')
+                
+                
+                plt.figure(figsize=(5, 5))
+                average_reward = []
+                for idx in range(len(reward_records)):
+                    avg_list = np.empty(shape=(1,), dtype=int)
+                    if idx < 50:
+                        avg_list = reward_records[:idx+1]
+                    else:
+                        avg_list = reward_records[idx-49:idx+1]
+                    average_reward.append(np.average(avg_list))
+
+                # Plot
+                plt.plot(reward_records, label='reward')
+                plt.plot(average_reward, label='average reward')
+                plt.xlabel('N episode')
+                plt.ylabel('Reward')
+                plt.legend()
+                #plt.show();
+                
+                plt.savefig(folder_name + '/reward_' + str(i) + '.png')
+                
+                plt.close("all")
+                
+                # Additional information
+                EPOCH = i
+                PATH = './gif_animations/A2C/A2C_agent.pt'
+                LOSS = loss#.item()
+
+                torch.save({
+                            'epoch': EPOCH,
+                            'model_state_dict': actor_critic_func.state_dict(),
+                            'optimizer_state_dict': opt1.state_dict(),
+                            'loss': LOSS,
+                            'folder_name': folder_name,
+                            'reward_records': reward_records,
+                            'v_loss_records': v_loss_records
+                            }, PATH)
+
+
+                
         
             
 
@@ -760,6 +828,9 @@ for i in range(num_episodes):
 
 print("\nDone")
 env.close()
+
+
+
 
 
 

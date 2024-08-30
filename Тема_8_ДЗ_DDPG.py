@@ -128,19 +128,15 @@ class QNet(nn.Module):
         # Формула расчета свёрточной сети:
         # N=(W-F+2P)/S+1 где N: размер вывода W: размер ввода F: размер ядра свертки P: размер значения заполнения S: размер шага
         
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) #nn.Linear( in_features = 96*96*3*frames_number, out_features = hidden_dim)
-        self.maxpool = nn.MaxPool2d(2, stride=2)
+        # Variant 2.2 Larger and better than Variant 2.1  "Racetrack Navigation on OpenAIGym with Deep Reinforcement Learning"" (DDQN)
+        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=64,  kernel_size=8, stride=4) 
+        self.hidden2 = nn.Conv2d(in_channels=64,                    out_channels=128, kernel_size=4, stride=2)  # (8, 47, 47) 
+        self.hidden3 = nn.Conv2d(in_channels=128,                   out_channels=128, kernel_size=3, stride=1)  # (8, 47, 47) 
         
-        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        self.maxpool2 = nn.MaxPool2d(2, stride=1)
+        self.hidden_linear1 = nn.Linear(  in_features = 6272, out_features = 128)
+        self.hidden_linear2 = nn.Linear( in_features = 128, out_features = 4)
         
-        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
-        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        
-        #self.hidden_linear = nn.Linear( in_features = 64*5*5, out_features = 4*5*5)
-        self.hidden_linear = nn.Linear( in_features = 32, out_features = 4)
-        self.hidden_linear2 = nn.Linear( in_features = 4 + 3, out_features = 7)
-        
+        self.hidden_linear3 = nn.Linear( in_features = 4 + 3, out_features = 7)
         self.output_linear = nn.Linear( in_features = 7, out_features = 1)
 
         #self.hidden = nn.Linear(96*96*3, hidden_dim)
@@ -150,23 +146,24 @@ class QNet(nn.Module):
         
         outs = self.hidden(s)
         outs = F.relu(outs)
-        outs = self.maxpool(outs)
         
         outs = self.hidden2(outs)
         outs = F.relu(outs)
-        outs = self.maxpool2(outs)
         
         outs = self.hidden3(outs)
         outs = F.relu(outs)
         
         outs = torch.flatten( outs, 1 )
         
-        outs = self.hidden_linear( outs )
-        outs = F.relu(outs)
+        outs = self.hidden_linear1( outs )
+        #outs = F.relu(outs)
+        
+        outs = self.hidden_linear2( outs )
+        #outs = F.relu(outs)
         
         outs = torch.concat((outs, a), dim=-1) # !!!!
         
-        outs = self.hidden_linear2( outs )
+        outs = self.hidden_linear3( outs )
         outs = F.relu(outs)
         
         value = self.output_linear(outs)
@@ -180,40 +177,33 @@ class PolicyNet(nn.Module):
     def __init__(self, hidden_dim=16, frames_number = 10, channels = 1):
         super().__init__()
 
-        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=16, kernel_size=16, stride=2) 
-        self.maxpool = nn.MaxPool2d(2, stride=2)
-        self.hidden2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=8, stride=2)  # (8, 47, 47) 
-        self.maxpool2 = nn.MaxPool2d(2, stride=1)
+        self.hidden = nn.Conv2d(in_channels=channels*frames_number, out_channels=64,  kernel_size=8, stride=4) 
+        self.hidden2 = nn.Conv2d(in_channels=64,                    out_channels=128, kernel_size=4, stride=2)  # (8, 47, 47) 
+        self.hidden3 = nn.Conv2d(in_channels=128,                   out_channels=128, kernel_size=3, stride=1)  # (8, 47, 47) 
         
-        self.hidden3 = nn.Conv2d(in_channels=8, out_channels=32, kernel_size=3, stride = 2) # (16*23*23)      
-        self.hidden4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride = 2) # (32, 11, 11)
-        
-        self.hidden_linear = nn.Linear( in_features = 32, out_features = 32)
+        self.hidden_linear1 = nn.Linear(  in_features = 6272, out_features = 64)
+        self.hidden_linear2 = nn.Linear( in_features = 64, out_features = 32)
         
         self.steering = nn.Linear( in_features = 32, out_features = 1)
-        self.steering2 = nn.Linear( in_features = 32, out_features = 1)
-          
         self.acceleration = nn.Linear( in_features = 32, out_features = 1)
         self.brake = nn.Linear( in_features = 32, out_features = 1)
         
     def forward(self, s):
         outs = self.hidden(s)
         outs = F.relu(outs)
-        outs = self.maxpool(outs)
         
         outs = self.hidden2(outs)
         outs = F.relu(outs)
-        outs = self.maxpool2(outs)
         
         outs = self.hidden3(outs)
         outs = F.relu(outs)
 
         outs = torch.flatten( outs, 1 )
         
-        outs = self.hidden_linear( outs )
+        outs = self.hidden_linear1( outs )
+        outs = self.hidden_linear2( outs )
         
         steering     = F.tanh(    self.steering(outs) )/4.0 #- F.tanh(    self.steering2(outs) )
-        
         acceleration = F.sigmoid( self.acceleration(outs) )/10.0
         brake        = F.sigmoid( self.brake(outs) )/1000.0
         
@@ -261,6 +251,8 @@ def optimize(states, actions, rewards, next_states, dones):
     
     for p in q_origin_model.parameters():
         p.requires_grad = True # enable grad again
+        
+    return loss_q.sum(), q_tgt.sum()
 
 # %%
 tau = 0.002
@@ -389,13 +381,17 @@ def weights_init_uniform_rule(m):
 
     
 # %%
-stacked_frames = 4
+stacked_frames = 10
 channels = 1
 
-env = gym.make("CarRacing-v2")  # среда
+env = gym.make(
+    "CarRacing-v2", 
+    options={"randomize": False}
+    )  # среда
+
 env = ImageEnv_GrayScaled(
     env,
-    skip_frames = 5,
+    skip_frames = 3,
     stack_frames = stacked_frames,
     initial_no_op = 50)
 
@@ -421,13 +417,13 @@ mu_origin_model.apply(weights_init_uniform_rule) # !!!!
 mu_target_model.apply(weights_init_uniform_rule) # !!!!
 
 gamma = 0.99
-opt_q = torch.optim.AdamW(q_origin_model.parameters(), lr=0.0005)
+opt_q  = torch.optim.AdamW(q_origin_model.parameters(), lr=0.0005)
 opt_mu = torch.optim.AdamW(mu_origin_model.parameters(), lr=0.0005)
 
 buffer = replayBuffer(buffer_size=20000)
 
-ou_steering_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.5)
-ou_acceleration_noise    = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.05)
+ou_steering_noise     = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.01)
+ou_acceleration_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=np.ones(1) * 0.0025)
 
 # Create directory once
 timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -439,13 +435,35 @@ reward_records = []
 episodes_number = 5000
 episode = 0
 
+loss_q_records = []
+loss_mu_records = []
+
 if False:
     for p in q_origin_model.parameters():
         p.requires_grad = True # enable grad again
 
+if False:
+    # Load model checkpoint
+    checkpoint = torch.load('./gif_animations/DDPG/DDPG_agent_q_origin.pt')
+    q_origin_model.load_state_dict(checkpoint['model_state_dict'])
+    
+    reward_records = checkpoint['reward_records']
+    loss_q_records = checkpoint['loss_q_records']
+    loss_mu_records = checkpoint['loss_mu_records']
+    
+    checkpoint = torch.load('./gif_animations/DDPG/DDPG_agent_q_target.pt')
+    q_target_model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = torch.load('./gif_animations/DDPG/DDPG_agent_mu_origin.pt')
+    mu_origin_model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = torch.load('./gif_animations/DDPG/DDPG_agent_mu_target.pt')
+    mu_target_model.load_state_dict(checkpoint['model_state_dict'])
+
+    episode = checkpoint['epoch']
+
+
 # %%
 
-batch_size = 2500
+batch_size = 1000
 
 while episode < episodes_number:
     # Run episode till done
@@ -474,7 +492,9 @@ while episode < episodes_number:
         # Train (optimize parameters)
         if buffer.length() >= batch_size:
             states, actions, rewards, next_states, dones = buffer.sample(batch_size)  #  next_states.shape  buffer.length() buffer[0]
-            optimize(states, actions, rewards, next_states, dones)
+            loss_q, loss_mu = optimize(states, actions, rewards, next_states, dones)
+            loss_q_records.append( loss_q )
+            loss_mu_records.append( loss_mu )
             update_target()
         s = s_next
         
@@ -518,7 +538,7 @@ while episode < episodes_number:
                 2), 
                   end="\n\n\n")
             
-    if episode % 5 == 0:
+    if episode % 10 == 0:
             if True:
                 # Create animation
                 if channels == 1:
@@ -537,6 +557,92 @@ while episode < episodes_number:
                 # Save animation to file
                 anim.save(folder_name + '/animation_' + str(episode) + '.gif') #, writer='imagemagick')
                 #HTML(anim.to_jshtml())
+                
+                
+                
+                # Plot v_loss_records  k = 0
+                plt.figure(figsize=(5, 5))
+                plt.plot( [loss_q_records[k].cpu().tolist() for k in range(len(loss_q_records))] )
+                plt.xlabel('i')
+                plt.ylabel('q_loss')
+                plt.title('q_loss vs i')
+                #plt.show()
+                
+                plt.savefig(folder_name + '/q_loss_' + str(episode) + '.png')
+                
+                
+                # Plot v_loss_records
+                plt.figure(figsize=(5, 5))
+                plt.plot( [loss_mu_records[k].cpu().tolist() for k in range(len(loss_mu_records))] )
+                plt.xlabel('i')
+                plt.ylabel('mu_loss')
+                plt.title('mu_loss vs i')
+                #plt.show()
+                
+                plt.savefig(folder_name + '/mu_loss_' + str(episode) + '.png')
+                
+                
+                
+                
+                plt.figure(figsize=(5, 5))
+                average_reward = []
+                for idx in range(len(reward_records)):
+                    avg_list = np.empty(shape=(1,), dtype=int)
+                    if idx < 50:
+                        avg_list = reward_records[:idx+1]
+                    else:
+                        avg_list = reward_records[idx-49:idx+1]
+                    average_reward.append(np.average(avg_list))
+
+                # Plot
+                plt.plot(reward_records, label='reward')
+                plt.plot(average_reward, label='average reward')
+                plt.xlabel('N episode')
+                plt.ylabel('Reward')
+                plt.legend()
+                #plt.show();
+                
+                plt.savefig(folder_name + '/reward_' + str(episode) + '.png')
+                
+                plt.close("all")
+                
+                #EPOCH = episode
+                #PATH = folder_name + "/DDPG_agent.pt"
+                #LOSS = loss#.item()
+
+                torch.save({
+                            'epoch': episode,
+                            'model_state_dict': q_origin_model.state_dict(),
+                            'optimizer_state_dict': opt_q.state_dict(),
+                            'reward_records': reward_records,
+                            'loss_q_records': loss_q_records,
+                            'loss_mu_records': loss_mu_records,
+                            #'buffer': buffer
+                            #'loss': LOSS,
+                            }, "./gif_animations/DDPG//DDPG_agent_q_origin.pt")
+                
+                torch.save({
+                            'epoch': episode,
+                            'model_state_dict': q_target_model.state_dict(),
+                            'optimizer_state_dict': opt_q.state_dict(),
+                            #'loss': LOSS,
+                            }, "./gif_animations/DDPG//DDPG_agent_q_target.pt")
+                
+                torch.save({
+                            'epoch': episode,
+                            'model_state_dict': mu_origin_model.state_dict(),
+                            'optimizer_state_dict': opt_mu.state_dict(),
+                            #'loss': LOSS,
+                            }, "./gif_animations/DDPG//DDPG_agent_mu_origin.pt")
+                
+                torch.save({
+                            'epoch': episode,
+                            'model_state_dict': mu_target_model.state_dict(),
+                            'optimizer_state_dict': opt_mu.state_dict(),
+                            #'loss': LOSS,
+                            }, "./gif_animations/DDPG//DDPG_agent_mu_target.pt")
+
+
 
     # stop if reward mean > 475.0
     if np.average(reward_records[-50:]) > 475.0:
