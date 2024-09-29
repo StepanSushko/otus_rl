@@ -1,1 +1,6 @@
 gif_animations/*
+Data/*
+.ipynb_checkpoints/*
+__pycache__/*
+model/*
+runs/*
