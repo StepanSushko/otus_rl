@@ -11,11 +11,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-import gym
-from gym import spaces
-from gym.envs.classic_control import utils
-from gym.error import DependencyNotInstalled
+import gymnasium as gym
+#from gym import spaces
+#from gym.envs.classic_control import utils
+#from gym.error import DependencyNotInstalled
 
+from gymnasium import spaces
+from gymnasium.envs.classic_control import utils
+from gymnasium.error import DependencyNotInstalled
 
 class UGSEnv(gym.Env):
     """
