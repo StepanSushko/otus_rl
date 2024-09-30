@@ -87,7 +87,7 @@ class UGSEnv(gym.Env):
     }
     
     
-    def __init__(self, render_mode: Optional[str] = None, number_of_ugs=2, balance = "hard"):
+    def __init__(self, render_mode: Optional[str] = None, number_of_ugs=2, balance = "hard", demand = "test_task", horizon = 30, random_start = False):
         """
         S_0 = 450, 450
         а_1 + а_2 = D
@@ -103,6 +103,8 @@ class UGSEnv(gym.Env):
 
         """
         
+        self.random_start = random_start
+        self.demand = demand
         self.number_of_ugs = number_of_ugs
         
         self.balance = balance
@@ -115,7 +117,8 @@ class UGSEnv(gym.Env):
         # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
         
         self.max_withdrwal = [-30.1, -30.2]
-        self.max_injection = [30.0, 30.0]
+        self.max_injection = [0.1, 0.1]
+        self.max_injection = [30.1, 30.1] # ! 
         
         # goals definition?
         # ??
@@ -137,41 +140,67 @@ class UGSEnv(gym.Env):
         
         self.start_date = 0 # pd.Timestamp('2024-01-01')
         self.timedelta = 1 # pd.Timedelta(days=1)
-        self.horizon = 30 - 1 # pd.Timedelta(days=180)
+        self.horizon = horizon # pd.Timedelta(days=180)
         
-        self.demand_with_noise = self.get_sinusoidal_signal_with_noise()
-        self.demand_with_noise = np.array([15.46, 15.93, 16.41, 16.9, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0])
+        if demand == "test_task":
+            self.demand_with_noise = np.array([15.46, 15.93, 16.41, 16.9, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0, 17.0])
+        
+        if demand == "sinusoidal":
+            self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = False)
+            
+        if demand == "sinusoidal_with_noise":
+            self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = True)
 
+        if balance == "hard":
+            self.action_space = spaces.Box(
+                low=np.array(self.max_withdrwal[:-1]), 
+                high=np.array(self.max_injection[:-1]), 
+                shape=(number_of_ugs - 1,), 
+                dtype=np.float32
+            )
+        else:
+            self.action_space = spaces.Box(
+                low=np.array(self.max_withdrwal), 
+                high=np.array(self.max_injection), 
+                shape=(number_of_ugs,), 
+                dtype=np.float32
+            )
         
-        self.action_space = spaces.Box(
-            low=np.array(self.max_withdrwal), high=np.array(self.max_injection), shape=(number_of_ugs,), dtype=np.float32
-        )
         self.observation_space = spaces.Box(
-            low  = np.concatenate([ np.array([0]),            np.array([self.demand_with_noise.min() * 0.8]), self.min_volume], axis=0, dtype=np.float32),
-            high = np.concatenate([ np.array([self.horizon]), np.array([self.demand_with_noise.max() * 1.2]), self.max_volume], axis=0, dtype=np.float32),
+            low  = np.concatenate([ 
+                np.array([0]),            
+                np.array([self.demand_with_noise.min() * 0.8]), 
+                self.min_volume], axis=0, dtype=np.float32),
+            high = np.concatenate([ 
+                np.array([self.horizon]), 
+                np.array([self.demand_with_noise.max() * 1.2]), 
+                self.max_volume], axis=0, dtype=np.float32),
             dtype=np.float32
         )
         
         
 
-        
-        
-        
 
     #state = 10
 
     #10 - 0.00006*state**2 + 0.05*state
 
-    def get_sinusoidal_signal_with_noise(self, base_level = 2.0, noise_level = 0.1, season_level = 2.0, period = 365, plot_figures = False, add_noise = False):
+    def get_sinusoidal_signal_with_noise(self, baseline_level = 2.0, noise_level = 0.1, season_level = 2.0, period = 365, plot_figures = False, add_noise = False, randomize = True):
+        
         t = np.arange(0, period, 1)
         signal = season_level * np.sin(2 * np.pi * t / 365)
-        noise = np.random.normal(0, noise_level, len(t))
+        
+        if randomize:
+            noise = np.random.normal(0, noise_level, len(t))
+        else:
+            noise = np.random.seed(0)
+            noise = np.random.normal(0, noise_level, len(t))
         
         signal_with_noise = 0.0
         if add_noise:
-            signal_with_noise = signal + noise + base_level
+            signal_with_noise = signal + noise + baseline_level
         else:
-            signal_with_noise = signal + base_level
+            signal_with_noise = signal + baseline_level
 
         if plot_figures:
             plt.figure(figsize=(10, 6))
@@ -187,7 +216,7 @@ class UGSEnv(gym.Env):
 
 
 
-    def step(self, action: np.ndarray, print_out = False):
+    def step(self, act: np.ndarray, print_out = False):
 
         self.next_state = self.state.copy()
         
@@ -200,9 +229,11 @@ class UGSEnv(gym.Env):
         
         reward = 0.0 
         
+        action = act.copy()
+        
         if self.balance == "hard":
             # ! NO DEFICIT
-            action[-1] = -(self.state[1] + action[:-1].sum())
+            action = np.append(action, -(self.state[1] + action.sum()))
         
         for i in range(2,self.number_of_ugs + 2):
             
@@ -226,9 +257,10 @@ class UGSEnv(gym.Env):
             if action[j] < -productivity:
                 #print(f"Action {i} is out of bounds, clipping to max withdrawal")
                 
-                penalty = - 100.0 * (- productivity - action[j]) **2
+                penalty = - 111.0  - 1.0* (- productivity - action[j]) **2
                 reward += penalty
-                #action[j] = -productivity
+                
+                action[j] = -productivity
                 
                 if print_out:
                     print(f"Action {j} is greater than productivity, clipping to max withdrawal. Penalty = {penalty}, total reward = {reward}")
@@ -236,19 +268,20 @@ class UGSEnv(gym.Env):
         
             if action[j] > 0:
                 
-                penalty = - 10000.0 * action[j]**2
+                penalty = -666.0 - 10.0 * action[j]**2
                 reward += penalty
                 if print_out:
                     print(f"Action {j} is positive. Penalty = {penalty}, total reward = {reward}")
-                #action[j] = 0
+                    
+                action[j] = 0
 
 
             if self.state[i] + action[j] > self.max_volume[j]:
                 #print(f"State {i} is out of bounds, clipping to max volume")
-                penalty = -( self.max_volume[j] - (self.state[i] + action[j])  ) **2
+                penalty = -333.0 - 1.0 *( self.max_volume[j] - (self.state[i] + action[j])  ) **2
                 reward += penalty
                 
-                #action[j] = self.max_volume[j] - self.state[i]
+                action[j] = self.max_volume[j] - self.state[i]
                 
                 if print_out:
                     print(f"Action {i} is out of bounds, clipping to max volume. Penalty = {penalty}, total reward = {reward}")
@@ -257,10 +290,10 @@ class UGSEnv(gym.Env):
             if self.state[i] + action[j] < self.min_volume[j]:
                 #print(f"State {i} is out of bounds, clipping to min volume")
 
-                penalty = -( self.min_volume[j] - (self.state[i] + action[j])  ) **2
+                penalty = -444.0 - 1.0 * ( self.min_volume[j] - (self.state[i] + action[j])  ) **2
                 reward += penalty
 
-                #action[j] = self.min_volume[j] - self.state[i]
+                action[j] = self.min_volume[j] - self.state[i]
                 
                 if print_out:
                     print(f"Action {i} is out of bounds, clipping to min volume. Penalty = {penalty}, total reward = {reward}")
@@ -273,7 +306,7 @@ class UGSEnv(gym.Env):
         if self.balance == "soft":
             # ! Deficit level
             if np.abs(self.state[1] + action.sum()) >= 0.5:
-                penalty = - 100.0 * (np.abs(self.state[1] + action.sum()) - 0.5)**2 # !!! next state ???
+                penalty = - 100.0 - 100.0* (np.abs(self.state[1] + action.sum()) - 0.5)**2 # !!! next state ???
                 reward += penalty
                 
                 if print_out:
@@ -343,7 +376,7 @@ class UGSEnv(gym.Env):
 
 
 
-    def reset(self, *, random_start: bool = False, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         
         super().reset(seed=seed)
         # Note that if you use custom reset bounds, it may lead to out-of-bound
@@ -353,30 +386,41 @@ class UGSEnv(gym.Env):
         #print("Date: ", self.date_time)
         #low, high = utils.maybe_parse_reset_bounds(options, 480, 520)
         
-        if random_start:
-            self.state = self.np_random.uniform(low= np.array(self.max_volume) * 0.9, high=np.array( self.max_volume) * 1.1)
+        if self.random_start:
+            self.state = self.np_random.uniform(low= np.array(self.max_volume) * 0.8, high=np.array( self.max_volume) * 1.0)
         else:
             self.state = 0.9* np.array(self.max_volume)
             
         #if self.render_mode == "human":
         #    self.render()
         
-        for i in range(self.number_of_ugs):
-            # UGS1 productivity y = 5 + 0.0000001*x^3 + 0.00004*x^2 - 0.02*x
-            # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
+        if not self.random_start:
+            for i in range(self.number_of_ugs):
+                # UGS1 productivity y = 5 + 0.0000001*x^3 + 0.00004*x^2 - 0.02*x
+                # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
 
-            if self.state[i]  > self.max_volume[i]:
-                print(f"State {i} is out of bounds, clipping to max volume")
-                self.state[i] = self.max_volume[i] 
-            if self.state[i] < self.min_volume[i]:
-                print(f"State {i} is out of bounds, clipping to min volume")
-                self.state[i] = self.min_volume[i]
+                if self.state[i]  > self.max_volume[i]:
+                    print(f"State {i} is out of bounds, clipping to max volume")
+                    self.state[i] = self.max_volume[i] 
+                if self.state[i] < self.min_volume[i]:
+                    print(f"State {i} is out of bounds, clipping to min volume")
+                    self.state[i] = self.min_volume[i]
                 
+        if self.random_start:
+            
+            if self.demand == "sinusoidal":
+                self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = False, randomize = True)
+                
+            if self.demand == "sinusoidal_with_noise":
+                self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = True, randomize = True)
 
         #if self.render_mode == "human":
         #    self.render()
         
-        self.state = np.concatenate([ np.array([self.date_time]), np.array([ self.demand_with_noise[self.date_time]]), self.state], axis=0, dtype=np.float32)
+        self.state = np.concatenate([ 
+            np.array([self.date_time]), 
+            np.array([ self.demand_with_noise[self.date_time]]), 
+            self.state], axis=0, dtype=np.float32)
 
         return np.array(self.state, dtype=np.float32), {}
 
