@@ -112,16 +112,16 @@ class UGSEnv(gym.Env):
         
         self.balance = balance
 
-        self.min_volume = [1.0, 2.0]
-        self.max_volume = [500.0, 500.0]
+        self.min_volume = [2.0]*number_of_ugs
+        self.max_volume = [500.0]*number_of_ugs
         
         
         # UGS1 productivity y = 5 + 0.0000001*x^3 + 0.00004*x^2 - 0.02*x
         # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
         
-        self.max_withdrwal = [-30.1, -30.2]
-        self.max_injection = [0.1, 0.1]
-        self.max_injection = [30.1, 30.1] # ! 
+        self.max_withdrwal = [-30.1]*number_of_ugs
+        self.max_injection = [0.1]*number_of_ugs
+        self.max_injection = [30.1]*number_of_ugs # ! 
         
         # goals definition?
         # ??
@@ -153,6 +153,9 @@ class UGSEnv(gym.Env):
             
         if demand == "sinusoidal_with_noise":
             self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = True)
+            
+        if number_of_ugs > 2:
+            self.demand_with_noise = np.sum([self.demand_with_noise]*((number_of_ugs//2)-1), axis=0)
 
         if balance == "hard":
             self.action_space = spaces.Box(
@@ -244,10 +247,10 @@ class UGSEnv(gym.Env):
             
             productivity = 0
             # UGS1 productivity y = 5 + 0.0000001*x^3 + 0.00004*x^2 - 0.02*x
-            if i == 2:
+            if i % 2 == 0:
                 productivity = 5.0 + 0.0000001*self.state[i]**3 + 0.00004*self.state[i]**2 - 0.02*self.state[i]
             # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
-            if i == 3:
+            if i % 2 != 0:
                 productivity = 10.0 - 0.00006*self.state[i]**2 + 0.05*self.state[i]
             
             
@@ -349,10 +352,10 @@ class UGSEnv(gym.Env):
         if self.date_time == self.horizon:
             cum_productivity = 0.0
             for i in range(2,self.number_of_ugs + 2):
-                    if i == 2:
+                    if i % 2 == 0:
                         cum_productivity += 1*(5.0 + 0.0000001*self.next_state[i]**3 + 0.00004*self.next_state[i]**2 - 0.02*self.next_state[i])
                     # UGS2 productivity y = 10 - 0.00006*x^2 + 0.05*x
-                    if i == 3:
+                    if i % 2 != 0:
                         cum_productivity += 1*(10.0 - 0.00006*self.next_state[i]**2 + 0.05*self.next_state[i])
             
             premium = 10.0*cum_productivity**2
