@@ -1,5 +1,8 @@
 # %%
 
+#%load_ext autoreload
+#%autoreload 2
+
 from TD3_utils import str2bool,evaluate_policy, Reward_adapter
 from datetime import datetime
 from TD3_agent import TD3_agent
@@ -24,14 +27,14 @@ parser.add_argument('--seed', type=int, default=0, help='random seed')
 parser.add_argument('--update_every', type=int, default=50, help='training frequency')
 parser.add_argument('--Max_train_steps', type=int, default=int(5e6), help='Max training steps')
 parser.add_argument('--save_interval', type=int, default=int(1e5), help='Model saving interval, in steps.')
-parser.add_argument('--eval_interval', type=int, default=int(10e3), help='Model evaluating interval, in steps.')
+parser.add_argument('--eval_interval', type=int, default=int(5e3), help='Model evaluating interval, in steps.')
 
 parser.add_argument('--delay_freq', type=int, default=1, help='Delayed frequency for Actor and Target Net')
 parser.add_argument('--gamma', type=float, default=1.0, help='Discounted Factor') # !
-parser.add_argument('--net_width', type=int, default=512, help='Hidden net width, s_dim-400-300-a_dim') # !
+parser.add_argument('--net_width', type=int, default=256, help='Hidden net width, s_dim-400-300-a_dim') # !
 parser.add_argument('--a_lr', type=float, default=5e-4, help='Learning rate of actor') # !
 parser.add_argument('--c_lr', type=float, default=1e-4, help='Learning rate of critic')
-parser.add_argument('--batch_size', type=int, default=256*32, help='batch_size of training') # !
+parser.add_argument('--batch_size', type=int, default=256*64, help='batch_size of training') # !
 parser.add_argument('--explore_noise', type=float, default=1.0, help='exploring noise when interacting') # !
 parser.add_argument('--explore_noise_decay', type=float, default=0.998, help='Decay rate of explore noise')
 opt, unknown = parser.parse_known_args()
@@ -39,25 +42,32 @@ opt.dvc = torch.device(opt.dvc) # from str to torch.device
 print(opt)
 
 
-NUMBER_OF_UGS = 2
+NUMBER_OF_UGS = 6
     
-env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS, demand="sinusoidal_with_noise", horizon = 180, random_start = True)
-    
+env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS,  balance="hard", demand="test_task", horizon = 29, random_start = True) # sinusoidal_with_noise
+env.demand_with_noise
+
 
 
 
 # %%
 
 def main():
+    
     EnvName = ['Pendulum-v1','LunarLanderContinuous-v2','Humanoid-v4','HalfCheetah-v4','BipedalWalker-v3','BipedalWalkerHardcore-v3', 'UGS-v0']
     BrifEnvName = ['PV1', 'LLdV2', 'Humanv4', 'HCv4','BWv3', 'BWHv3', 'UGS']
 
     # Build Env
     #env = gym.make(EnvName[opt.EnvIdex], render_mode = "human" if opt.render else None)
-    NUMBER_OF_UGS = 4
+    NUMBER_OF_UGS = 14
     
-    env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS,  balance="hard", demand="sinusoidal_with_noise", horizon = 180, random_start = True)
-    eval_env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS,  balance="hard", demand="sinusoidal_with_noise", horizon = 180, random_start = True)
+    balance="hard"
+    demand="test_task" 
+    horizon = 29
+    random_start = True
+    
+    env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS,  balance=balance, demand=demand, horizon = horizon, random_start = random_start) # sinusoidal_with_noise
+    eval_env = UGS_environment.UGSEnv(number_of_ugs = NUMBER_OF_UGS,  balance=balance, demand=demand, horizon = horizon, random_start = random_start)
     
     
     #eval_env = gym.make(EnvName[opt.EnvIdex])
@@ -83,7 +93,7 @@ def main():
         from torch.utils.tensorboard import SummaryWriter
         timenow = str(datetime.now())[0:-10]
         timenow = ' ' + timenow[0:13] + '_' + timenow[-2::]
-        writepath = 'runs/{}'.format('UGSenv_TD3') + timenow
+        writepath = 'runs/{}'.format('UGSenv_TD3_' + demand + '_nw' + str(opt.net_width) + "_bs" + str(opt.batch_size)) + timenow
         if os.path.exists(writepath): shutil.rmtree(writepath)
         writer = SummaryWriter(log_dir=writepath)
 
@@ -95,7 +105,7 @@ def main():
 
     if opt.render:
         while True:
-            score = evaluate_policy(env, agent, opt, turns=1)
+            score = evaluate_policy(env, agent, opt, turns=1)[0]
             print('EnvName:', BrifEnvName[opt.EnvIdex], 'score:', score)
             
             
@@ -111,11 +121,13 @@ def main():
             while not done:
                 if total_steps < (10*opt.max_e_steps): a = env.action_space.sample() # warm up
                 else: a = agent.select_action(s, deterministic=False)
-                s_next, r, dw, tr, info = env.step(a) # dw: dead&win; tr: truncated
+                
+                s_next, r, dw, tr, action = env.step(a) # dw: dead&win; tr: truncated
                 r = Reward_adapter(r, opt.EnvIdex)
                 done = (dw or tr)
 
-                agent.replay_buffer.add(s, a, r, s_next, dw)
+                #agent.replay_buffer.add(s, a, r, s_next, dw)
+                agent.replay_buffer.add(s, action[:-1], r, s_next, dw)
                 s = s_next
                 total_steps += 1
 
@@ -128,17 +140,19 @@ def main():
                 '''record & log'''
                 if total_steps % opt.eval_interval == 0:
                     agent.explore_noise *= opt.explore_noise_decay
-                    ep_r, prod, v1, v2 = evaluate_policy(eval_env, agent, opt, turns=1)
-                    if opt.write: writer.add_scalar('ep_r', ep_r, global_step=total_steps)
-                    if opt.write: writer.add_scalar('productivity', prod, global_step=total_steps)
-                    for i in range(env.number_of_ugs):
-                        if opt.write: writer.add_scalar(f'Volume{i+1}', eval(f'v{i+1}'), global_step=total_steps)
+                    ep_r, prod, vol = evaluate_policy(eval_env, agent, opt, turns=1)
+                    if opt.write: 
+                        for i in range(env.number_of_ugs):
+                            writer.add_scalar(f'Volume{i+1}', vol[i], global_step=total_steps)
+                        writer.add_scalar('ep_r', ep_r, global_step=total_steps)
+                        writer.add_scalar('productivity', prod, global_step=total_steps)
+
                     
                     print(f'EnvName:{BrifEnvName[opt.EnvIdex]}, Steps: {int(total_steps/1000)}k, Episode Reward:{ep_r}', "\n")
 
                 '''save model'''
                 if total_steps % opt.save_interval == 0:
-                    agent.save(BrifEnvName[opt.EnvIdex], int(total_steps/1000))
+                    agent.save( 'UGS_TD3_' + demand + 'nw' + str(opt.net_width) + "_bs" + str(opt.batch_size), int(total_steps/1000))
         env.close()
         eval_env.close()
 

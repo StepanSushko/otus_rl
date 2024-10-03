@@ -76,7 +76,7 @@ def evaluate_policy(env, agent, opt, turns = 1):
             # Take deterministic actions at test time   
             
 			a = agent.select_action(s, deterministic=True)
-			s_next, r, dw, tr, info = env.step(a)
+			s_next, r, dw, tr, action = env.step(a)
 			done = (dw or tr)
 			total_scores += r
    
@@ -84,13 +84,17 @@ def evaluate_policy(env, agent, opt, turns = 1):
 			if env.balance == "hard":
 				# ! NO DEFICIT
 				a = np.append(a, -(s[1] + a.sum()))
-			actions_records.append(a)
+			#actions_records.append(act)
+			actions_records.append(action[:-1])
 			rewards_records.append(r)
 
-			productivity_records.append(
-       			[round( 5.0 + 0.0000001*s[2]**3 + 0.00004*s[2]**2 - 0.02*s[2], 3 ),
-                 round(10.0 - 0.00006*s[3]**2 + 0.05*s[3], 3)]
-                )
+			productivity = []
+			for i in range(env.number_of_ugs):
+				if i % 2 == 0:
+					productivity.append(round( 5.0 + 0.0000001*s[2+j]**3 + 0.00004*s[2+j]**2 - 0.02*s[2+j], 3 ))
+				else:
+					productivity.append(round(10.0 - 0.00006*s[2+j]**2 + 0.05*s[2+j], 3))
+			productivity_records.append(productivity)
             
 			s = s_next
 
@@ -104,19 +108,18 @@ def evaluate_policy(env, agent, opt, turns = 1):
 					#" Computation time:", round(computation_time/60, 2), " minutes",
 					#"  \na =", actions[0:4]
 					"state = " +    "".join(
-						"     ".join(str([ round(  s, 3) for s in state]) + "" for state in np.array(states_records)[i:i+1]) # actions[0]
+						"     ".join(str([ str(round(  s, 3)) for s in state]) + "" for state in np.array(states_records)[i:i+1]) # actions[0]
 						
-					),
-					"action = " +    "".join( 
-						"     ".join(str([ round(  a, 3) for a in action]) + "" for action in np.array(actions_records)[i:i+1]) # actions[0]
+					),					"action = " +    "".join( 
+						"     ".join(str([ str(round(  a, 3)) for a in action]) + "" for action in np.array(actions_records)[i:i+1]) # actions[0]
 						
 					),
 					"reward = " +    "".join( 
-						"     ".join(str([ round(  a, 3) for a in action]) + "" for action in (np.array([rewards_records]).T)[i:i+1]) # actions[0]
+						"     ".join(str([ str(round(  a, 3)) for a in action]) + "" for action in (np.array([rewards_records]).T)[i:i+1]) # actions[0]
 						
 					),
 					"productivity = " +    "".join( 
-						"     ".join(str([ round(  a, 3) for a in action]) + "" for action in (np.array(productivity_records))[i:i+1]) # actions[0]
+						"     ".join(str([ str(round(  a, 3)) for a in action]) + "" for action in (np.array(productivity_records))[i:i+1]) # actions[0]
 						
 					),
      					"(" +    "".join( 
@@ -131,7 +134,7 @@ def evaluate_policy(env, agent, opt, turns = 1):
 					" Productivity =", str( round( sum(np.array(productivity_records)[-1]), 3))
 	)
  
-	return int(total_scores/turns), sum(np.array(productivity_records)[-1]), (np.array(states_records)[-1])[2], (np.array(states_records)[-1])[3]
+	return int(total_scores/turns), sum(np.array(productivity_records)[-1]), (np.array(states_records)[-1])[2:(env.number_of_ugs+2)]
 
 
 

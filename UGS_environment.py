@@ -155,7 +155,10 @@ class UGSEnv(gym.Env):
             self.demand_with_noise = self.get_sinusoidal_signal_with_noise( add_noise = True)
             
         if number_of_ugs > 2:
-            self.demand_with_noise = np.sum([self.demand_with_noise]*((number_of_ugs//2)-1), axis=0)
+            demand_sum = self.demand_with_noise.copy()
+            for i in range(2, number_of_ugs, 2):
+                demand_sum += self.demand_with_noise
+            self.demand_with_noise = demand_sum
 
         if balance == "hard":
             self.action_space = spaces.Box(
@@ -235,7 +238,7 @@ class UGSEnv(gym.Env):
         
         reward = 0.0 
         
-        action = act.copy()
+        action = act#.copy()
         
         if self.balance == "hard":
             # ! NO DEFICIT
@@ -358,7 +361,7 @@ class UGSEnv(gym.Env):
                     if i % 2 != 0:
                         cum_productivity += 1*(10.0 - 0.00006*self.next_state[i]**2 + 0.05*self.next_state[i])
             
-            premium = 10.0*cum_productivity**2
+            premium = 10.0*(cum_productivity / self.number_of_ugs)**2
             
             reward += premium
             
@@ -376,7 +379,7 @@ class UGSEnv(gym.Env):
 
         self.state = self.next_state
             
-        return  self.next_state, reward, terminated, truncated, {}  # s_next, r, done, truncate, _
+        return  self.next_state, reward, terminated, truncated, action  # s_next, r, done, truncate, _
 
 
 
